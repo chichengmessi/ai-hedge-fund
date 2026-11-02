@@ -21,6 +21,8 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _version
 from typing import Protocol, runtime_checkable
 
 import requests
@@ -111,12 +113,15 @@ class JevLLM:
     credentials, which are redacted. Credentials are passed in explicitly.
     """
 
+    PROVIDER = "TypeSafe"
+    METADATA_KEY = "jev"
+    HEADERS: dict[str, str] = {}
     ENDPOINT = "https://api.typesafe.ai/v1/systemone"
     _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
 
     def __init__(self, api_key: str, model: str = "jev-1.13.0", timeout: float = 60.0) -> None:
         if not isinstance(api_key, str) or not api_key.strip():
-            raise ValueError("A non-empty TypeSafe API key is required")
+            raise ValueError(f"A non-empty {self.PROVIDER} API key is required")
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be a positive finite number")
         self.model = model
@@ -126,7 +131,7 @@ class JevLLM:
     def cache_key(self, agent: str, system: str, user: str) -> str:
         """Hash semantic inputs only; do not disturb legacy prompt keys."""
         identity = {
-            "provider": "TypeSafe",
+            "provider": self.PROVIDER,
             "endpoint": self.ENDPOINT,
             "agent": agent,
             "request": contract.build_jev_request(system, user, self.model),
@@ -139,7 +144,7 @@ class JevLLM:
         request = contract.build_jev_request(system, user, self.model)
         started = time.monotonic()
         diagnostics = {
-            "provider": "TypeSafe",
+            "provider": self.PROVIDER,
             "contract_version": contract.JEV_CONTRACT_VERSION,
             "request": request,
             "attempt_count": 0,
@@ -159,7 +164,7 @@ class JevLLM:
                 with requests.post(
                     self.ENDPOINT,
                     json=request,
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    headers={**self.HEADERS, "Authorization": f"Bearer {self._api_key}"},
                     timeout=self._timeout,
                     allow_redirects=False,
                 ) as response:
@@ -167,28 +172,28 @@ class JevLLM:
                     raw = response.text
                     retry_after = response.headers.get("Retry-After")
             except requests.RequestException:
-                fail("transport", "TypeSafe request failed during transport")
+                fail("transport", f"{self.PROVIDER} request failed during transport")
 
             diagnostics.update(status_code=status, raw_response=raw)
             if status in self._RETRY_STATUSES and attempt == 1:
                 delay = _retry_delay(retry_after)
                 if delay > self._timeout:
-                    fail("http", f"TypeSafe HTTP {status}: retry delay exceeds timeout")
+                    fail("http", f"{self.PROVIDER} HTTP {status}: retry delay exceeds timeout")
                 time.sleep(delay)
                 continue
             if not 200 <= status < 300:
-                fail("http", f"TypeSafe returned HTTP {status}")
+                fail("http", f"{self.PROVIDER} returned HTTP {status}")
             try:
                 native_response = json.loads(raw)
             except ValueError:
-                fail("json_decode", "TypeSafe returned invalid JSON")
+                fail("json_decode", f"{self.PROVIDER} returned invalid JSON")
             try:
                 payload, metadata = contract.normalize_jev_response(native_response)
             except contract.JevContractError as exc:
-                fail("contract", f"TypeSafe response failed validation: {exc}")
+                fail("contract", f"{self.PROVIDER} response failed validation: {exc}")
 
             metadata.update(diagnostics, elapsed_seconds=time.monotonic() - started)
-            payload["provider_metadata"] = {"jev": self._redact(metadata)}
+            payload["provider_metadata"] = {self.METADATA_KEY: self._redact(metadata)}
             return json.dumps(payload)
 
         raise AssertionError("unreachable: every attempt returns, retries, or raises")
@@ -202,6 +207,23 @@ class JevLLM:
         if isinstance(value, list):
             return [self._redact(item) for item in value]
         return value
+
+
+try:
+    _CLIENT = f"aihf/{_version('aihf')}"
+except PackageNotFoundError:  # running from source without an install
+    _CLIENT = "aihf/dev"
+
+
+class DrexLLM(JevLLM):
+    """Nace's Drex answers the same typed questions over the same wire format as
+    Jev. Provider and endpoint are in the cache key, so they never share answers."""
+
+    PROVIDER = "Nace"
+    METADATA_KEY = "drex"
+    ENDPOINT = "https://console.nace.ai/v1/systemone"
+    # Nace attributes Drex traffic to the client that sent it.
+    HEADERS = {"X-Nace-Client": _CLIENT, "User-Agent": _CLIENT}
 
 
 def _retry_delay(header: str | None) -> float:
@@ -251,6 +273,9 @@ def make_llm(
     if provider == "TypeSafe":
         # Typed judgments have no generated tokens or output-token budget.
         return JevLLM(api_key=api_key, model=model, timeout=timeout)
+
+    if provider == "Nace":
+        return DrexLLM(api_key=api_key, model=model, timeout=timeout)
 
     if provider == "Anthropic":
         from langchain_anthropic import ChatAnthropic

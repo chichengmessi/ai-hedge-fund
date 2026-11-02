@@ -25,6 +25,7 @@ PROVIDER_ENV_VARS = {
     "Google": "GOOGLE_API_KEY",
     "Kimi": "KIMI_API_KEY",
     "TypeSafe": "TYPESAFE_API_KEY",
+    "Nace": "NACE_API_KEY",
 }
 
 # Providers v2 has a client for (see client.py:make_llm). Anything in the

@@ -25,6 +25,11 @@
     "provider": "TypeSafe"
   },
   {
+    "display_name": "Drex Max Finance",
+    "model_name": "drex-max-finance",
+    "provider": "Nace"
+  },
+  {
     "display_name": "Grok 4.7",
     "model_name": "grok-4.7",
     "provider": "xAI"

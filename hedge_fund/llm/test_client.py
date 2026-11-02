@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
+from importlib.metadata import version
 from unittest.mock import Mock
 
 import pytest
@@ -30,7 +31,7 @@ from hedge_fund.llm import (
     provider_for,
     SUPPORTED_PROVIDERS,
 )
-from hedge_fund.llm.client import _flatten, JevLLM
+from hedge_fund.llm.client import _flatten, DrexLLM, JevLLM
 from hedge_fund.llm.registry import PROVIDER_ENV_VARS
 from hedge_fund.llm.test_contract import _response
 from hedge_fund.signals import ALPHA_MODEL_REGISTRY, BuffettAgent, LLMAgent, MungerAgent
@@ -558,6 +559,34 @@ def test_cache_identity_excludes_credentials_and_timeout_but_includes_agent_and_
     assert baseline != llm.cache_key("buffett", "system", "changed user")
     monkeypatch.setattr(llm, "ENDPOINT", "https://example.invalid/changed")
     assert baseline != llm.cache_key("buffett", "system", "user")
+
+
+def test_factory_routes_drex_to_nace_with_only_its_key(monkeypatch, http):
+    for variable in (*PROVIDER_ENV_VARS.values(), "MOONSHOT_API_KEY", "HEDGE_FUND_LLM_MODEL"):
+        monkeypatch.delenv(variable, raising=False)
+    with pytest.raises(ValueError, match="NACE_API_KEY"):
+        make_llm("drex-max-finance")
+    monkeypatch.setenv("NACE_API_KEY", API_KEY)
+    llm = make_llm("drex-max-finance", timeout=17)
+    assert isinstance(llm, DrexLLM)
+    _serve(http, _http_response())
+    payload = json.loads(llm.complete("investor", "snapshot"))
+    assert http[0].call_args.args[0] == "https://console.nace.ai/v1/systemone"
+    assert http[0].call_args.kwargs["json"] == contract.build_jev_request("investor", "snapshot", "drex-max-finance")
+    assert http[0].call_args.kwargs["timeout"] == 17
+    client = f"aihf/{version('aihf')}"
+    assert http[0].call_args.kwargs["headers"] == {"Authorization": f"Bearer {API_KEY}", "X-Nace-Client": client, "User-Agent": client}
+    assert list(payload["provider_metadata"]) == ["drex"]
+    assert payload["provider_metadata"]["drex"]["provider"] == "Nace"
+    assert llm.cache_key("buffett", "s", "u") != JevLLM(API_KEY, model="drex-max-finance").cache_key("buffett", "s", "u")
+
+
+def test_drex_failure_abstains_and_names_nace(tmp_path, http):
+    _serve(http, _http_response(status=401, raw="Invalid key"))
+    agent = BuffettAgent(llm=DrexLLM(API_KEY, model="drex-max-finance"), cache=PromptCache(tmp_path))
+    signal = agent.predict("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    assert signal.value == 0 and signal.metadata["abstained"] is True
+    assert signal.reasoning == "abstained: LLM call failed: Nace returned HTTP 401"
 
 
 @pytest.mark.parametrize("failure", ["http", "transport", "json_decode", "contract"])
