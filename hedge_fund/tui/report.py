@@ -293,7 +293,8 @@ def signal_detail(record: CycleRecord | DecisionRecord, si: int, sj: int) -> Gro
     signal = sr.signals[sj]
     _, word, tone = verdict(signal)
     confidence = signal.metadata.get("confidence")
-    jev = signal.metadata.get("provider_metadata", {}).get("jev")
+    provider_metadata = signal.metadata.get("provider_metadata", {})
+    jev = provider_metadata.get("jev") or provider_metadata.get("drex")
     header = Text()
     header.append(signal.ticker, style=f"bold {CYAN}")
     header.append("  ·  ", style=MUTED)
@@ -582,12 +583,13 @@ def _jev_details(metadata: dict) -> Text:
     """Explain saved typed answers in the existing detail pane."""
     answers = metadata["response"]["answers"]
     probabilities = answers["direction"]["probabilities"]
-    details = Text("Jev answer-option probabilities\n", style=MUTED)
+    model = "Drex" if metadata.get("provider") == "Nace" else "Jev"
+    details = Text(f"{model} answer-option probabilities\n", style=MUTED)
     details.append("  ·  ".join(
         f"{direction.capitalize()} {probabilities[direction]:.1%}"
         for direction in ("bullish", "bearish", "neutral")), style=TEXT)
     details.append("\nThese describe the supplied answer options, not investment returns.\n\n")
-    details.append("Jev native answer confidence\n")
+    details.append(f"{model} native answer confidence\n")
     details.append("\n".join(
         f"{label}: {answers[name]['confidence']:.1%}"
         for name, label in (

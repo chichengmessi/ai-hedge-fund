@@ -41,6 +41,16 @@ def test_jev_results_show_stored_direction_and_separate_confidence(direction, st
     assert verdict[0] in render(option.prompt)
 
 
+def test_drex_results_are_labelled_drex():
+    signal = make_signal("bullish", 3.2)
+    provider_metadata = signal.metadata["provider_metadata"]
+    provider_metadata["drex"] = {**provider_metadata.pop("jev"), "provider": "Nace"}
+    detail = render(report.signal_detail(make_cycle(signal), 0, 0))
+    assert "Drex answer-option probabilities" in detail
+    assert "Drex native answer confidence" in detail
+    assert "Jev" not in detail
+
+
 def test_abstention_overrides_stored_direction():
     signal = Signal(model_name="buffett", ticker="TEST", date="2025-01-15", value=0, reasoning="abstained: TypeSafe returned HTTP 401", metadata={"abstained": True, "signal": "bullish"})
     text = render(report.signal_detail(make_cycle(signal), 0, 0))
